@@ -14,5 +14,12 @@ class Settings(BaseSettings):
     qdrant_api_key: str | None = None
     redis_url: str = "redis://localhost:6379/0"
 
+    # yt-dlp anonymous downloads increasingly hit 403 from YouTube's
+    # anti-bot detection. Setting this to 'chrome' / 'edge' / 'firefox'
+    # tells yt-dlp to read cookies from the local browser, which makes
+    # requests indistinguishable from the developer's normal browsing.
+    # Unset in production; use a managed cookies.txt refresh instead.
+    yt_dlp_cookies_browser: str | None = None
+
 
 settings = Settings()

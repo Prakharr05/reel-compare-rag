@@ -6,6 +6,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from app.config import settings
 
 import yt_dlp
 from youtube_transcript_api import (
@@ -75,18 +76,21 @@ def _parse_yt_date(yyyymmdd: Optional[str]) -> Optional[datetime]:
 
 
 def _download_audio(url: str, target_dir: Path) -> Path:
-    """
-    Download bestaudio to disk, no transcoding. No FFmpegExtractAudio
-    postprocessor — m4a is native, Deepgram accepts it directly, and
-    skipping ffmpeg keeps deploy artifacts ~200MB smaller.
-    """
     out_template = str(target_dir / "%(id)s.%(ext)s")
     opts = {
         "quiet": True,
         "no_warnings": True,
-        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "format": "bestaudio/best",
         "outtmpl": out_template,
+        # Fallback chain of player clients. 'web' alone gets SABR-walled
+        # on some Shorts; 'android' and 'ios' often still return real
+        # audio streams. yt-dlp tries them in order.
+        "extractor_args": {
+            "youtube": {"player_client": ["android", "ios", "web"]},
+        },
     }
+    if settings.yt_dlp_cookies_browser:
+        opts["cookiesfrombrowser"] = (settings.yt_dlp_cookies_browser,)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
     if info.get("requested_downloads"):

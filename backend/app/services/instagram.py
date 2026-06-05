@@ -12,6 +12,7 @@ import yt_dlp
 from app.models.schemas import IngestedVideo, VideoMetadata
 from app.services.apify import fetch_instagram_post
 from app.services.transcription import transcribe_audio_file
+from app.config import settings
 
 
 _IG_PATTERNS = [
@@ -41,6 +42,8 @@ def _download_audio(url: str, target_dir: Path) -> Path:
         "format": "bestaudio[ext=m4a]/bestaudio/best",
         "outtmpl": out_template,
     }
+    if settings.yt_dlp_cookies_browser:
+        opts["cookiesfrombrowser"] = (settings.yt_dlp_cookies_browser,)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
     if info.get("requested_downloads"):
