@@ -1,9 +1,16 @@
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from app.models.schemas import IngestRequest, IngestedVideo
 from app.services import youtube, instagram
+from app.services.indexing import index_video
 
 router = APIRouter()
+
+
+class IngestResponse(BaseModel):
+    video: IngestedVideo
+    chunks_indexed: int
 
 
 def _route_by_url(url: str):
@@ -14,22 +21,32 @@ def _route_by_url(url: str):
     return None
 
 
-@router.post("", response_model=IngestedVideo)
+@router.post("", response_model=IngestResponse)
 async def ingest(req: IngestRequest):
-    """Single endpoint, routes by URL. This is what the frontend calls."""
     url = str(req.url)
     handler = _route_by_url(url)
     if handler is None:
         raise HTTPException(status_code=400, detail="URL must be YouTube or Instagram")
+
     try:
-        return await handler(url)
+        video = await handler(url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ingestion failed: {e}")
 
+    # Indexing is best-effort: if Qdrant is down the user still has
+    # metadata+transcript. Frontend can flag "RAG unavailable" instead
+    # of failing the whole request.
+    try:
+        indexed = await index_video(video)
+    except Exception as e:
+        print(f"WARN: indexing failed for {video.metadata.video_id}: {e}")
+        indexed = 0
 
-# Platform-specific endpoints kept for direct testing / debugging
+    return IngestResponse(video=video, chunks_indexed=indexed)
+
+
 @router.post("/youtube", response_model=IngestedVideo)
 async def ingest_youtube_endpoint(req: IngestRequest):
     try:
