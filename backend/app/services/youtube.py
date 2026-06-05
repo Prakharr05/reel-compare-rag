@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import re
+import tempfile
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
 
 import yt_dlp
@@ -12,6 +15,7 @@ from youtube_transcript_api import (
 )
 
 from app.models.schemas import IngestedVideo, TranscriptSegment, VideoMetadata
+from app.services.transcription import transcribe_audio_file
 
 
 _YT_ID_PATTERNS = [
@@ -31,11 +35,10 @@ def _fetch_metadata(url: str) -> dict:
     """
     yt-dlp metadata without downloading the video.
 
-    Note: skip_download=True does NOT skip format selection in yt-dlp's
-    default flow, so on some YouTube Shorts the default 'bv*+ba/b' format
-    string raises 'Requested format is not available'. We only need
-    metadata, so pass process=False to short-circuit format resolution
-    entirely. Roughly 2x faster too.
+    process=False skips format selection — yt-dlp's default 'bv*+ba/b'
+    fails on some Shorts with 'Requested format is not available' even
+    when skip_download=True, because format selection happens before
+    the download check. ~2x faster too.
     """
     opts = {
         "quiet": True,
@@ -71,9 +74,29 @@ def _parse_yt_date(yyyymmdd: Optional[str]) -> Optional[datetime]:
         return None
 
 
-def ingest_youtube(url: str) -> IngestedVideo:
+def _download_audio(url: str, target_dir: Path) -> Path:
+    """
+    Download bestaudio to disk, no transcoding. No FFmpegExtractAudio
+    postprocessor — m4a is native, Deepgram accepts it directly, and
+    skipping ffmpeg keeps deploy artifacts ~200MB smaller.
+    """
+    out_template = str(target_dir / "%(id)s.%(ext)s")
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "format": "bestaudio[ext=m4a]/bestaudio/best",
+        "outtmpl": out_template,
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(url, download=True)
+    if info.get("requested_downloads"):
+        return Path(info["requested_downloads"][0]["filepath"])
+    return next(target_dir.glob(f"{info['id']}.*"))
+
+
+async def ingest_youtube(url: str) -> IngestedVideo:
     video_id = extract_video_id(url)
-    info = _fetch_metadata(url)
+    info = await asyncio.to_thread(_fetch_metadata, url)
 
     likes = info.get("like_count") or 0
     views = info.get("view_count") or 0
@@ -99,11 +122,22 @@ def ingest_youtube(url: str) -> IngestedVideo:
         thumbnail_url=info.get("thumbnail"),
     )
 
-    transcript = _fetch_transcript_via_api(video_id)
-    transcript_source = "youtube_captions" if transcript else "asr_pending"
+    # Free path first: official captions
+    captions = await asyncio.to_thread(_fetch_transcript_via_api, video_id)
+    if captions:
+        return IngestedVideo(
+            metadata=metadata,
+            transcript=captions,
+            transcript_source="youtube_captions",
+        )
+
+    # Fallback: download audio, transcribe via Deepgram
+    with tempfile.TemporaryDirectory() as tmpdir:
+        audio_path = await asyncio.to_thread(_download_audio, url, Path(tmpdir))
+        transcript = await transcribe_audio_file(audio_path)
 
     return IngestedVideo(
         metadata=metadata,
-        transcript=transcript or [],
-        transcript_source=transcript_source,
+        transcript=transcript,
+        transcript_source="asr_deepgram",
     )
