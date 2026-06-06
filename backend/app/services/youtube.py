@@ -51,18 +51,25 @@ def _fetch_metadata(url: str) -> dict:
 
 
 def _fetch_transcript_via_api(video_id: str) -> Optional[list[TranscriptSegment]]:
-    """Free captions path. Returns None if unavailable — caller falls back to ASR."""
+    """
+    Free captions path. Returns None if unavailable — caller falls back to ASR.
+
+    NOTE: youtube-transcript-api 1.x changed the API from static
+    YouTubeTranscriptApi.get_transcript() to instance .fetch() and
+    returns FetchedTranscript objects (with .text/.start/.duration
+    attributes) instead of dicts.
+    """
     try:
-        raw = YouTubeTranscriptApi.get_transcript(
-            video_id, languages=["en", "en-US", "en-GB", "hi"]
-        )
+        ytt_api = YouTubeTranscriptApi()
+        fetched = ytt_api.fetch(video_id, languages=["en", "en-US", "en-GB", "hi"])
         return [
-            TranscriptSegment(text=seg["text"], start=seg["start"], duration=seg["duration"])
-            for seg in raw
+            TranscriptSegment(text=seg.text, start=seg.start, duration=seg.duration)
+            for seg in fetched
         ]
-    except (NoTranscriptFound, TranscriptsDisabled):
-        return None
-    except Exception:
+    except Exception as e:
+        # Was: silently swallowed. Now: visible in logs so we actually
+        # know when captions break vs when they're genuinely unavailable.
+        print(f"INFO: captions unavailable for {video_id}: {type(e).__name__}: {e}")
         return None
 
 
