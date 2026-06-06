@@ -35,6 +35,16 @@ def _fetch_metadata(url: str) -> dict:
 
 
 def _download_audio(url: str, target_dir: Path) -> Path:
+    """
+    Download best audio track to disk, no transcoding.
+
+    Note: deliberately NOT applying cookiesfrombrowser for Instagram.
+    Public Reels work anonymously via yt-dlp; adding cookies just
+    introduces friction (Chromium-based browsers lock their cookie DB
+    while running, and that's the kind of error that breaks the demo
+    when a teammate runs this from a fresh machine). YouTube needs
+    cookies for anti-bot escape; Instagram does not.
+    """
     out_template = str(target_dir / "%(id)s.%(ext)s")
     opts = {
         "quiet": True,
@@ -42,8 +52,6 @@ def _download_audio(url: str, target_dir: Path) -> Path:
         "format": "bestaudio[ext=m4a]/bestaudio/best",
         "outtmpl": out_template,
     }
-    if settings.yt_dlp_cookies_browser:
-        opts["cookiesfrombrowser"] = (settings.yt_dlp_cookies_browser,)
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(url, download=True)
     if info.get("requested_downloads"):
